@@ -23,9 +23,6 @@ public interface IDataSourceDescriptor
     /// </summary>
     string? NameKey { get; }
 
-    // mark internal so external data source descriptors cannot implement this interface directly
-    internal Type DataSourceType { get; }
-
     /// <summary>
     ///     Setter will be called on the main thread
     /// </summary>
@@ -49,12 +46,6 @@ public interface IDataSourceDescriptor
 /// <typeparam name="T">Type of the HR data source</typeparam>
 public interface IDataSourceDescriptor<T> : IDataSourceDescriptor where T : class, IHRDataSource
 {
-    /// <summary>
-    ///     Default implementation returning the generic type parameter <typeparamref name="T"/>.
-    ///     Do NOT re-implement. This guarantees <see cref="IDataSourceDescriptor.DataSourceType"/>
-    ///     is always an <see cref="IHRDataSource"/>.
-    /// </summary>
-    Type IDataSourceDescriptor.DataSourceType => typeof(T);
 }
 
 /// <summary>

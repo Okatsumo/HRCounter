@@ -8,7 +8,9 @@ using HRCounter.Configuration;
 using HRCounter.Data.DataSources;
 using HRCounter.Data.SourceDescriptors;
 using HRCounter.Utils;
+#if !BUILD_WITHOUT_YUR
 using IPA.Loader;
+#endif
 using JetBrains.Annotations;
 using Zenject;
 using Component = UnityEngine.Component;
@@ -27,7 +29,9 @@ public sealed class DataSourceManager : IDisposable
     private const string WEBREQUEST_KEY = "WebRequest";
     private const string HRPROXY_KEY = "HRProxy";
     private const string YUR_APP_KEY = "YUR APP";
+#if !BUILD_WITHOUT_YUR
     private const string YUR_MOD_KEY = "YUR MOD";
+#endif
 
     [Inject]
     private readonly IPALogger _logger = null!;
@@ -39,6 +43,7 @@ public sealed class DataSourceManager : IDisposable
     private readonly DiContainer _diContainer = null!;
 
     private readonly Dictionary<string, IDataSourceDescriptor> _sources = new(StringComparer.InvariantCultureIgnoreCase);
+    private readonly Dictionary<string, Type> _sourceTypes = new(StringComparer.InvariantCultureIgnoreCase);
 
     internal IReadOnlyDictionary<string, IDataSourceDescriptor> DataSources => _sources;
 
@@ -72,6 +77,7 @@ public sealed class DataSourceManager : IDisposable
         }
 
         _sources.Clear();
+        _sourceTypes.Clear();
     }
 
     private void OnConfigChanged(object? _, PropertyChangedEventArgs e)
@@ -101,6 +107,8 @@ public sealed class DataSourceManager : IDisposable
 
     internal IDataSourceDescriptor? GetFromKey(string str) => _sources.GetValueOrDefault(str);
 
+    internal Type? GetDataSourceType(string key) => _sourceTypes.GetValueOrDefault(key);
+
     public void RegisterDataSource<T>(string key, Func<CancellationToken, Task<string>> getStatusText,
         Func<bool> precondition, string? name = null, string? nameKey = null) where T : class, IHRDataSource
     {
@@ -121,6 +129,7 @@ public sealed class DataSourceManager : IDisposable
         if (_sources.ContainsKey(key)) throw new ArgumentException($"Key {key} already exists!", nameof(key));
         _logger.Debug("Registering data source: " + key);
         _sources.Add(descriptor.Key, descriptor);
+        _sourceTypes.Add(descriptor.Key, typeof(T));
     }
 
     public void RegisterDataSource<TDesc, TSource>() where TDesc : class, IDataSourceDescriptor<TSource> where TSource : class, IHRDataSource
@@ -171,6 +180,7 @@ public sealed class DataSourceManager : IDisposable
             "YUR App"
         );
 
+#if !BUILD_WITHOUT_YUR
         RegisterDataSource<YURMod>(YUR_MOD_KEY,
             () => PluginManager.GetPluginFromId(DataSourceUtils.YUR_MOD_ID) == null
                 ? Localization.Get("HRCOUNTER_YUR_MOD_SOURCE_DESCRIPTOR_NOT_INSTALLED")
@@ -178,6 +188,7 @@ public sealed class DataSourceManager : IDisposable
             () => PluginManager.GetPluginFromId(DataSourceUtils.YUR_MOD_ID) != null,
             "YUR Mod"
         );
+#endif
 
         RegisterDataSource(new SimpleSourceDescriptor<PulsoidWidget>(PULSOID_WIDEGT_KEY, "HRCOUNTER_PULSOID_WIDGET_SOURCE_DESCRIPTOR_LABEL",
             () => _config.PulsoidWidgetID, _config, nameof(_config.PulsoidWidgetID)));

@@ -31,6 +31,13 @@ public class GameplayHeartRateInstaller : Installer<GameplayHeartRateInstaller>
             return;
         }
 
+        var sourceType = _dataSourceManager.GetDataSourceType(_config.DataSource);
+        if (sourceType is null)
+        {
+            _logger.Error($"No data source type registered for: {_config.DataSource}");
+            return;
+        }
+
         if (!source.PreconditionMet())
         {
             _logger.Warn($"{source} precondition not met! Did you set your link/id/token or install the required dependencies?");
@@ -38,16 +45,16 @@ public class GameplayHeartRateInstaller : Installer<GameplayHeartRateInstaller>
         }
 
         _logger.Debug("Binding BPM Downloader");
-        if (typeof(Component).IsAssignableFrom(source.DataSourceType))
+        if (typeof(Component).IsAssignableFrom(sourceType))
         {
-            Container.BindInterfacesAndSelfTo(source.DataSourceType)
+            Container.BindInterfacesAndSelfTo(sourceType)
                 .FromNewComponentOnNewGameObject()
                 .WithGameObjectName($"HRCounter {source.Key} Data Source")
                 .AsSingle();
         }
         else
         {
-            Container.BindInterfacesAndSelfTo(source.DataSourceType).AsSingle();
+            Container.BindInterfacesAndSelfTo(sourceType).AsSingle();
         }
 
         _logger.Debug("Binding hr controller");

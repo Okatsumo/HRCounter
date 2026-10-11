@@ -1,0 +1,129 @@
+name: Build and release HRCounter
+
+on:
+  push:
+  pull_request:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-hrcounter-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name || github.sha }}
+          fetch-depth: 0
+
+      - name: Initialize Beat Saber 1.40.8 references
+        uses: beat-forge/init-beatsaber@v1
+        with:
+          version: 1.40.8
+          path: Refs
+
+      - name: Install mod reference assemblies
+        shell: pwsh
+        run: |
+          $refs = Join-Path $env:GITHUB_WORKSPACE 'Refs'
+          $plugins = Join-Path $refs 'Plugins'
+          New-Item -ItemType Directory -Path $plugins -Force | Out-Null
+          $headers = @{ 'User-Agent' = 'HRCounter-CI/1.0' }
+          $mods = Invoke-RestMethod -Uri 'https://beatmods.com/api/beatmods/mod?gameName=Beat%20Saber&gameVersion=1.40.8' -Headers $headers
+          $tempRoot = Join-Path $env:RUNNER_TEMP 'hrcounter-mod-references'
+          New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+          foreach ($name in @('BeatSaberMarkupLanguage', 'SiraUtil', 'BeatLeader')) {
+            $mod = $mods | Where-Object { $_.name -eq $name } | Select-Object -First 1
+            if ($null -eq $mod) { throw "BeatMods has no $name build for Beat Saber 1.40.8." }
+            $download = $mod.downloads | Where-Object { $_.type -eq 'universal' } | Select-Object -First 1
+            if ($null -eq $download) { throw "BeatMods has no universal download for $name." }
+            $archive = Join-Path $tempRoot "$name.zip"
+            $extract = Join-Path $tempRoot $name
+            $downloadUrl = "https://beatmods.com$($download.url)"
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $archive -Headers $headers
+            Expand-Archive -Path $archive -DestinationPath $extract -Force
+            $pluginDlls = @(Get-ChildItem (Join-Path $extract 'Plugins') -Filter '*.dll')
+            if ($pluginDlls.Count -eq 0) { throw "No plugin DLLs found in $name archive." }
+            $pluginDlls | Copy-Item -Destination $plugins -Force
+          }
+          $countersArchive = Join-Path $tempRoot 'CountersPlus.zip'
+          $countersExtract = Join-Path $tempRoot 'CountersPlus'
+          Invoke-WebRequest -Uri 'https://github.com/NuggoDEV/CountersPlus/releases/download/2.3.11/Counters%2B-2.3.11-bs1.40.0-49cf7df.zip' -OutFile $countersArchive -Headers $headers
+          Expand-Archive -Path $countersArchive -DestinationPath $countersExtract -Force
+          $countersDll = Get-ChildItem $countersExtract -Recurse -Filter 'Counters+.dll' | Select-Object -First 1
+          if ($null -eq $countersDll) { throw 'Counters+ DLL was not found in the downloaded archive.' }
+          Copy-Item $countersDll.FullName -Destination $plugins -Force
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Validate release metadata
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $manifest = Get-Content HRCounter/manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.gameVersion -ne '1.40.8') {
+            throw "This workflow only publishes Beat Saber 1.40.8 builds; manifest gameVersion is $($manifest.gameVersion)."
+          }
+          if ($env:GITHUB_EVENT_NAME -eq 'release' -and $manifest.version -ne $env:RELEASE_TAG) {
+            throw "Release tag $env:RELEASE_TAG must match manifest version $($manifest.version)."
+          }
+
+      - name: Build release ZIP
+        shell: pwsh
+        run: dotnet build HRCounter/HRCounter.csproj --configuration Release -p:BeatSaberDir="$env:GITHUB_WORKSPACE\Refs" -p:GameDirectory="$env:GITHUB_WORKSPACE\Refs" -p:FrameworkPathOverride="$env:USERPROFILE\.nuget\packages\microsoft.netframework.referenceassemblies.net472\1.0.3\build\.NETFramework\v4.7.2" -p:ReferencePath="$env:GITHUB_WORKSPACE\Refs\Beat Saber_Data\Managed%3B$env:GITHUB_WORKSPACE\Refs\Libs%3B$env:GITHUB_WORKSPACE\Refs\Plugins" -p:ResolveAssemblyReferenceIgnoreTargetFrameworkAttributeVersionMismatch=true -p:UseCIFrameworkReferences=true -p:DisableCopyToGame=true -p:DisableZipRelease=false -p:ArtifactDestination="bin\Release\net472\Artifact" -p:BuildWithoutYur=true
+
+      - name: Find ZIP and write SHA-256 checksum
+        id: package
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem HRCounter/bin/Release/net472/zip/*.zip)
+          if ($packages.Count -ne 1) {
+            throw "Expected one release ZIP in HRCounter/bin/Release/net472/zip, found $($packages.Count)."
+          }
+          $package = $packages[0]
+          $hash = (Get-FileHash $package.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          $checksum = "$hash  $($package.Name)"
+          $checksumPath = "$($package.FullName).sha256"
+          Set-Content -Path $checksumPath -Value $checksum -NoNewline
+      - name: Upload build ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          name: hrcounter-1.40.8-${{ github.run_id }}
+          path: HRCounter/bin/Release/net472/zip/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download build ZIP
+        uses: actions/download-artifact@v7
+        with:
+          name: hrcounter-1.40.8-${{ github.run_id }}
+          path: release-assets
+
+      - name: Attach ZIP to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" release-assets/* --clobber --repo "$GITHUB_REPOSITORY"
